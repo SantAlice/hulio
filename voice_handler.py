@@ -10,7 +10,7 @@ import discord
 from discord.ext import commands
 
 try:
-    import voice_recv
+    from discord.ext import voice_recv
     HAS_VOICE_RECV = True
 except ImportError:
     HAS_VOICE_RECV = False
