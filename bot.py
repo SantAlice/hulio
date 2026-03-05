@@ -12,6 +12,7 @@ import os
 import sys
 
 import discord
+discord.opus._load_default()
 
 import config
 import llm
