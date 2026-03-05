@@ -12,7 +12,8 @@ import os
 import sys
 
 import discord
-discord.opus._load_default()
+from discord import app_commands
+from discord.ext import commands
 
 import config
 import llm
@@ -33,7 +34,7 @@ intents.message_content = True
 intents.voice_states = True
 intents.members = True
 
-bot = discord.Bot(intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 voice_handler: VoiceHandler | None = None
 
 
@@ -58,62 +59,66 @@ async def on_ready():
     # Создаём обработчик голоса
     voice_handler = VoiceHandler(bot)
 
+    # Синхронизируем slash-команды
+    try:
+        synced = await bot.tree.sync()
+        log.info("Синхронизировано %d команд", len(synced))
+    except Exception as e:
+        log.error("Ошибка синхронизации команд: %s", e)
+
     log.info("Готов к работе! Используй /join чтобы пригласить в войс.")
 
 
 # === Slash Commands ===
 
-@bot.slash_command(name="join", description="Присоединиться к твоему голосовому каналу")
-async def join_cmd(ctx: discord.ApplicationContext):
-    # Получаем участника из кэша гильдии (ctx.author может не содержать voice state)
-    member = ctx.guild.get_member(ctx.author.id)
+@bot.tree.command(name="join", description="Присоединиться к твоему голосовому каналу")
+async def join_cmd(interaction: discord.Interaction):
+    member = interaction.guild.get_member(interaction.user.id)
     if not member or not member.voice:
-        await ctx.respond("Ты не в голосовом канале! Зайди в войс сначала.", ephemeral=True)
+        await interaction.response.send_message(
+            "Ты не в голосовом канале! Зайди в войс сначала.", ephemeral=True
+        )
         return
 
     channel = member.voice.channel
-    await ctx.respond(f"Захожу в **{channel.name}**...")
+    await interaction.response.send_message(f"Захожу в **{channel.name}**...")
 
     try:
         await voice_handler.join(channel)
-        await ctx.edit(content=f"Я в **{channel.name}**! Говорите — я слушаю.")
+        await interaction.edit_original_response(
+            content=f"Я в **{channel.name}**! Говорите — я слушаю."
+        )
     except Exception as e:
         log.error("Ошибка подключения: %s", e)
-        await ctx.edit(content=f"Не могу подключиться: {e}")
+        await interaction.edit_original_response(
+            content=f"Не могу подключиться: {e}"
+        )
 
 
-@bot.slash_command(name="leave", description="Выйти из голосового канала")
-async def leave_cmd(ctx: discord.ApplicationContext):
+@bot.tree.command(name="leave", description="Выйти из голосового канала")
+async def leave_cmd(interaction: discord.Interaction):
     if not voice_handler or not voice_handler.voice_client:
-        await ctx.respond("Я и так не в войсе.", ephemeral=True)
+        await interaction.response.send_message("Я и так не в войсе.", ephemeral=True)
         return
 
     await voice_handler.leave()
-    await ctx.respond("Всё, я вышел. Пока!")
+    await interaction.response.send_message("Всё, я вышел. Пока!")
 
 
-@bot.slash_command(name="voice", description="Сменить голос бота")
-async def voice_cmd(
-    ctx: discord.ApplicationContext,
-    voice_name: discord.Option(
-        str,
-        "Название голоса (например ru-RU-DmitryNeural)",
-        required=True,
-    ),
-):
+@bot.tree.command(name="voice", description="Сменить голос бота")
+@app_commands.describe(voice_name="Название голоса (например ru-RU-DmitryNeural)")
+async def voice_cmd(interaction: discord.Interaction, voice_name: str):
     config.TTS_VOICE = voice_name
-    await ctx.respond(f"Голос изменён на **{voice_name}**")
+    await interaction.response.send_message(f"Голос изменён на **{voice_name}**")
 
 
-@bot.slash_command(name="voices", description="Показать доступные голоса")
-async def voices_cmd(
-    ctx: discord.ApplicationContext,
-    language: discord.Option(str, "Язык (ru, en, ja, ...)", default="ru"),
-):
-    await ctx.defer()
+@bot.tree.command(name="voices", description="Показать доступные голоса")
+@app_commands.describe(language="Язык (ru, en, ja, ...)")
+async def voices_cmd(interaction: discord.Interaction, language: str = "ru"):
+    await interaction.response.defer()
     voices = await tts.list_voices(language)
     if not voices:
-        await ctx.respond(f"Голоса для языка '{language}' не найдены.")
+        await interaction.followup.send(f"Голоса для языка '{language}' не найдены.")
         return
 
     lines = []
@@ -124,24 +129,17 @@ async def voices_cmd(
     text = f"**Голоса для '{language}':**\n" + "\n".join(lines)
     if len(voices) > 20:
         text += f"\n... и ещё {len(voices) - 20}"
-    await ctx.respond(text)
+    await interaction.followup.send(text)
 
 
-@bot.slash_command(name="personality", description="Сменить личность бота")
-async def personality_cmd(
-    ctx: discord.ApplicationContext,
-    name: discord.Option(
-        str,
-        "Имя личности (default, anime_girl, toxic_gamer) или путь к файлу",
-        required=True,
-    ),
-):
-    # Пробуем найти файл
+@bot.tree.command(name="personality", description="Сменить личность бота")
+@app_commands.describe(name="Имя личности (default, anime_girl, toxic_gamer) или путь к файлу")
+async def personality_cmd(interaction: discord.Interaction, name: str):
     path = name
     if not os.path.exists(path):
         path = f"personalities/{name}.txt"
     if not os.path.exists(path):
-        await ctx.respond(
+        await interaction.response.send_message(
             f"Файл личности не найден: `{name}`\n"
             f"Доступные: {', '.join(list_personalities())}",
             ephemeral=True,
@@ -151,41 +149,41 @@ async def personality_cmd(
     personality_text = load_personality(path)
     llm.set_personality(personality_text)
     config.PERSONALITY_FILE = path
-    await ctx.respond(f"Личность изменена на **{name}**! История очищена.")
+    await interaction.response.send_message(
+        f"Личность изменена на **{name}**! История очищена."
+    )
 
 
-@bot.slash_command(name="clear", description="Очистить историю разговоров")
-async def clear_cmd(ctx: discord.ApplicationContext):
+@bot.tree.command(name="clear", description="Очистить историю разговоров")
+async def clear_cmd(interaction: discord.Interaction):
     llm.clear_all_history()
-    await ctx.respond("История очищена! Начинаем с чистого листа.")
+    await interaction.response.send_message("История очищена! Начинаем с чистого листа.")
 
 
-@bot.slash_command(name="rate", description="Скорость речи бота")
-async def rate_cmd(
-    ctx: discord.ApplicationContext,
-    speed: discord.Option(str, "Скорость (например +20%, -10%, +0%)", required=True),
-):
+@bot.tree.command(name="rate", description="Скорость речи бота")
+@app_commands.describe(speed="Скорость (например +20%, -10%, +0%)")
+async def rate_cmd(interaction: discord.Interaction, speed: str):
     config.TTS_RATE = speed
-    await ctx.respond(f"Скорость речи: **{speed}**")
+    await interaction.response.send_message(f"Скорость речи: **{speed}**")
 
 
-@bot.slash_command(name="say", description="Заставить бота сказать что-то в войс")
-async def say_cmd(
-    ctx: discord.ApplicationContext,
-    text: discord.Option(str, "Текст для озвучки", required=True),
-):
+@bot.tree.command(name="say", description="Заставить бота сказать что-то в войс")
+@app_commands.describe(text="Текст для озвучки")
+async def say_cmd(interaction: discord.Interaction, text: str):
     if not voice_handler or not voice_handler.voice_client:
-        await ctx.respond("Я не в войсе! Используй /join", ephemeral=True)
+        await interaction.response.send_message(
+            "Я не в войсе! Используй /join", ephemeral=True
+        )
         return
 
-    await ctx.defer()
+    await interaction.response.defer()
     audio_file = await tts.synthesize(text)
     await voice_handler._play_audio(audio_file)
     try:
         os.unlink(audio_file)
     except OSError:
         pass
-    await ctx.respond(f"Сказал: *{text}*")
+    await interaction.followup.send(f"Сказал: *{text}*")
 
 
 def list_personalities() -> list[str]:

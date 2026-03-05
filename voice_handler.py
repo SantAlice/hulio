@@ -7,6 +7,13 @@ import time
 from collections import defaultdict
 
 import discord
+from discord.ext import commands
+
+try:
+    import voice_recv
+    HAS_VOICE_RECV = True
+except ImportError:
+    HAS_VOICE_RECV = False
 
 import config
 import stt
@@ -48,32 +55,33 @@ class UserAudioBuffer:
 class VoiceHandler:
     """Управляет приёмом и отправкой голоса в Discord канале."""
 
-    def __init__(self, bot: discord.Bot):
+    def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.buffers: dict[int, UserAudioBuffer] = defaultdict(UserAudioBuffer)
-        self.processing: set[int] = set()  # user_ids currently being processed
+        self.processing: set[int] = set()
         self.voice_client: discord.VoiceClient | None = None
         self._monitor_task: asyncio.Task | None = None
         self._active = False
 
-    async def join(self, channel: discord.VoiceChannel) -> discord.VoiceClient:
+    async def join(self, channel: discord.VoiceChannel):
         """Подключиться к голосовому каналу."""
         if self.voice_client and self.voice_client.is_connected():
             await self.voice_client.move_to(channel)
         else:
-            self.voice_client = await channel.connect(cls=discord.VoiceClient)
+            if HAS_VOICE_RECV:
+                self.voice_client = await channel.connect(cls=voice_recv.VoiceRecvClient)
+            else:
+                self.voice_client = await channel.connect()
+                log.warning("voice_recv не установлен — приём аудио недоступен")
 
-        # Начинаем слушать
-        self.voice_client.start_recording(
-            discord.sinks.PCMSink(),
-            self._recording_finished,
-            channel,
-        )
+        # Начинаем слушать если есть voice_recv
+        if HAS_VOICE_RECV and isinstance(self.voice_client, voice_recv.VoiceRecvClient):
+            sink = voice_recv.BasicSink(self._on_audio_packet)
+            self.voice_client.listen(sink)
 
         self._active = True
         self._monitor_task = asyncio.create_task(self._silence_monitor())
         log.info("Подключен к каналу: %s", channel.name)
-        return self.voice_client
 
     async def leave(self):
         """Отключиться от голосового канала."""
@@ -83,8 +91,8 @@ class VoiceHandler:
             self._monitor_task = None
 
         if self.voice_client:
-            if self.voice_client.recording:
-                self.voice_client.stop_recording()
+            if HAS_VOICE_RECV and isinstance(self.voice_client, voice_recv.VoiceRecvClient):
+                self.voice_client.stop_listening()
             await self.voice_client.disconnect()
             self.voice_client = None
 
@@ -92,45 +100,44 @@ class VoiceHandler:
         self.processing.clear()
         log.info("Отключен от голосового канала")
 
-    async def _recording_finished(self, sink: discord.sinks.PCMSink, channel: discord.VoiceChannel):
-        """Колбэк когда запись останавливается — обрабатываем всё накопленное аудио."""
-        for user_id, audio_data in sink.audio_data.items():
-            audio_bytes = audio_data.file.read()
-            if len(audio_bytes) < 3200:  # слишком короткий фрагмент
-                continue
-            await self._process_user_audio(user_id, audio_bytes, channel)
+    def _on_audio_packet(self, user, packet):
+        """Колбэк для каждого полученного аудио-пакета."""
+        if user is None:
+            return
+        buf = self.buffers[user.id]
+        buf.add_chunk(packet.pcm)
 
     async def _silence_monitor(self):
         """
-        Периодически останавливаем и перезапускаем запись,
-        чтобы обработать накопленное аудио.
+        Периодически проверяем буферы пользователей.
+        Если пользователь замолчал (нет данных > SILENCE_DURATION), обрабатываем.
         """
         while self._active:
-            await asyncio.sleep(config.SILENCE_DURATION)
+            await asyncio.sleep(0.5)
 
             if not self.voice_client or not self.voice_client.is_connected():
                 break
 
-            if not self.voice_client.recording:
-                continue
+            now = time.time()
+            for user_id, buf in list(self.buffers.items()):
+                if not buf.is_speaking:
+                    continue
+                if buf.total_bytes < 3200:
+                    continue
 
-            try:
-                # Останавливаем запись — вызовется _recording_finished
-                self.voice_client.stop_recording()
-                # Небольшая пауза и перезапуск
-                await asyncio.sleep(0.3)
-                if self._active and self.voice_client and self.voice_client.is_connected():
-                    self.voice_client.start_recording(
-                        discord.sinks.PCMSink(),
-                        self._recording_finished,
-                        self.voice_client.channel,
-                    )
-            except Exception as e:
-                log.error("Ошибка в мониторе тишины: %s", e)
-                await asyncio.sleep(1)
+                silence_elapsed = now - buf.last_voice_time
+                if silence_elapsed >= config.SILENCE_DURATION or buf.duration_seconds >= config.MAX_RECORD_DURATION:
+                    audio_bytes = buf.get_audio()
+                    buf.clear()
+                    if len(audio_bytes) > 3200:
+                        guild = self.voice_client.guild if self.voice_client else None
+                        channel = self.voice_client.channel if self.voice_client else None
+                        asyncio.create_task(
+                            self._process_user_audio(user_id, audio_bytes, guild)
+                        )
 
     async def _process_user_audio(
-        self, user_id: int, audio_bytes: bytes, channel: discord.VoiceChannel
+        self, user_id: int, audio_bytes: bytes, guild: discord.Guild | None
     ):
         """Обработать аудио одного пользователя: STT -> LLM -> TTS -> Play."""
         if user_id in self.processing:
@@ -149,8 +156,11 @@ class VoiceHandler:
                 return
 
             # Определяем имя пользователя
-            member = channel.guild.get_member(user_id)
-            username = member.display_name if member else f"User#{user_id}"
+            username = f"User#{user_id}"
+            if guild:
+                member = guild.get_member(user_id)
+                if member:
+                    username = member.display_name
             log.info("[%s] сказал: %s", username, text)
 
             # Получаем ответ от LLM
