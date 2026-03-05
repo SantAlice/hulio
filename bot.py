@@ -65,11 +65,13 @@ async def on_ready():
 
 @bot.slash_command(name="join", description="Присоединиться к твоему голосовому каналу")
 async def join_cmd(ctx: discord.ApplicationContext):
-    if not ctx.author.voice:
+    # Получаем участника из кэша гильдии (ctx.author может не содержать voice state)
+    member = ctx.guild.get_member(ctx.author.id)
+    if not member or not member.voice:
         await ctx.respond("Ты не в голосовом канале! Зайди в войс сначала.", ephemeral=True)
         return
 
-    channel = ctx.author.voice.channel
+    channel = member.voice.channel
     await ctx.respond(f"Захожу в **{channel.name}**...")
 
     try:
