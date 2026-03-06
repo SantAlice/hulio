@@ -12,3 +12,4 @@ pydub>=0.25.1
 aiofiles>=23.0.0
 torch>=2.0.0
 torchaudio>=2.0.0
+omegaconf>=2.3.0
