@@ -6,8 +6,8 @@ load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
 
 # LLM настройки (OpenAI-совместимый API: DeepSeek, OpenAI, и т.д.)
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.deepseek.com")
-LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://openrouter.ai/api/v1")
+LLM_MODEL = os.getenv("LLM_MODEL", "deepseek/deepseek-chat-v3-0324")
 LLM_API_KEYS = [k.strip() for k in os.getenv("LLM_API_KEY", "").split(",") if k.strip()]
 LLM_API_KEY = LLM_API_KEYS[0] if LLM_API_KEYS else ""
 
