@@ -4,7 +4,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+# Поддержка нескольких ключей через запятую для ротации при исчерпании квоты
+GEMINI_API_KEYS = [k.strip() for k in os.getenv("GEMINI_API_KEY", "").split(",") if k.strip()]
+GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else ""
 VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "models/vosk-model-small-ru-0.22")
 TTS_VOICE = os.getenv("TTS_VOICE", "ru-RU-DmitryNeural")
 TTS_RATE = os.getenv("TTS_RATE", "+0%")
