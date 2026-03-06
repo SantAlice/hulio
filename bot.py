@@ -36,6 +36,7 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 voice_handler: VoiceHandler | None = None
+_synced = False
 
 
 def load_personality(path: str) -> str:
@@ -49,7 +50,7 @@ def load_personality(path: str) -> str:
 
 @bot.event
 async def on_ready():
-    global voice_handler
+    global voice_handler, _synced
     log.info("Бот запущен как %s (ID: %s)", bot.user.name, bot.user.id)
 
     # Инициализируем LLM
@@ -59,12 +60,14 @@ async def on_ready():
     # Создаём обработчик голоса
     voice_handler = VoiceHandler(bot)
 
-    # Синхронизируем slash-команды
-    try:
-        synced = await bot.tree.sync()
-        log.info("Синхронизировано %d команд", len(synced))
-    except Exception as e:
-        log.error("Ошибка синхронизации команд: %s", e)
+    # Синхронизируем slash-команды (только один раз)
+    if not _synced:
+        try:
+            synced = await bot.tree.sync()
+            _synced = True
+            log.info("Синхронизировано %d команд", len(synced))
+        except Exception as e:
+            log.error("Ошибка синхронизации команд: %s", e)
 
     log.info("Готов к работе! Используй /join чтобы пригласить в войс.")
 
@@ -81,18 +84,14 @@ async def join_cmd(interaction: discord.Interaction):
         return
 
     channel = member.voice.channel
-    await interaction.response.send_message(f"Захожу в **{channel.name}**...")
+    await interaction.response.defer()
 
     try:
         await voice_handler.join(channel)
-        await interaction.edit_original_response(
-            content=f"Я в **{channel.name}**! Говорите — я слушаю."
-        )
+        await interaction.followup.send(f"Я в **{channel.name}**! Говорите — я слушаю.")
     except Exception as e:
         log.error("Ошибка подключения: %s", e)
-        await interaction.edit_original_response(
-            content=f"Не могу подключиться: {e}"
-        )
+        await interaction.followup.send(f"Не могу подключиться: {e}")
 
 
 @bot.tree.command(name="leave", description="Выйти из голосового канала")
