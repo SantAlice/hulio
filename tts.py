@@ -102,8 +102,8 @@ async def _synthesize_silero(text: str, voice: str | None = None) -> str:
         tmp_path = tmp.name
         tmp.close()
 
-        import torchaudio
-        torchaudio.save(tmp_path, audio.unsqueeze(0), _silero_sample_rate)
+        import scipy.io.wavfile
+        scipy.io.wavfile.write(tmp_path, _silero_sample_rate, audio.numpy())
 
         # Применяем pitch shift
         tmp_path = _apply_pitch_shift(tmp_path, config.TTS_PITCH_SEMITONES)
