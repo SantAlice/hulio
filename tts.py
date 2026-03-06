@@ -1,6 +1,9 @@
-"""Text-to-Speech модуль с поддержкой Silero TTS и Edge TTS."""
+"""Text-to-Speech модуль с поддержкой Silero TTS и Edge TTS + pitch shift."""
 
+import asyncio
 import logging
+import os
+import subprocess
 import tempfile
 import torch
 import config
@@ -27,6 +30,40 @@ def _get_silero_model():
     return _silero_model
 
 
+def _apply_pitch_shift(input_path: str, semitones: float) -> str:
+    """Сдвинуть тон аудио через ffmpeg. Возвращает путь к новому файлу."""
+    if semitones == 0:
+        return input_path
+
+    # Формула: множитель частоты = 2^(semitones/12)
+    factor = 2 ** (semitones / 12.0)
+
+    output = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    output_path = output.name
+    output.close()
+
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", input_path,
+                "-af", f"asetrate={int(_silero_sample_rate * factor)},aresample={_silero_sample_rate}",
+                "-loglevel", "error",
+                output_path,
+            ],
+            check=True,
+            capture_output=True,
+        )
+        os.unlink(input_path)
+        return output_path
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        log.warning("Pitch shift не удался (ffmpeg): %s, используем оригинал", e)
+        try:
+            os.unlink(output_path)
+        except OSError:
+            pass
+        return input_path
+
+
 async def synthesize(text: str, voice: str | None = None, rate: str | None = None) -> str:
     """
     Синтезировать речь и сохранить в временный файл.
@@ -46,9 +83,7 @@ async def synthesize(text: str, voice: str | None = None, rate: str | None = Non
 
 
 async def _synthesize_silero(text: str, voice: str | None = None) -> str:
-    """Синтез через Silero TTS."""
-    import asyncio
-
+    """Синтез через Silero TTS + pitch shift."""
     voice = voice or config.TTS_VOICE
 
     def _generate():
@@ -65,11 +100,15 @@ async def _synthesize_silero(text: str, voice: str | None = None) -> str:
 
         import torchaudio
         torchaudio.save(tmp_path, audio.unsqueeze(0), _silero_sample_rate)
+
+        # Применяем pitch shift
+        tmp_path = _apply_pitch_shift(tmp_path, config.TTS_PITCH_SEMITONES)
         return tmp_path
 
     loop = asyncio.get_event_loop()
     tmp_path = await loop.run_in_executor(None, _generate)
-    log.debug("Silero TTS: сохранено в %s (%d символов, голос: %s)", tmp_path, len(text), voice)
+    log.debug("Silero TTS: сохранено в %s (%d символов, голос: %s, pitch: %+.0f)",
+              tmp_path, len(text), voice, config.TTS_PITCH_SEMITONES)
     return tmp_path
 
 

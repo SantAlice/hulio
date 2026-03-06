@@ -11,6 +11,7 @@ VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "models/vosk-model-ru-0.54")
 TTS_ENGINE = os.getenv("TTS_ENGINE", "silero")  # "silero" or "edge"
 TTS_VOICE = os.getenv("TTS_VOICE", "xenia")  # silero: aidar/baya/kseniya/xenia/eugene/random
 TTS_RATE = os.getenv("TTS_RATE", "+0%")
+TTS_PITCH_SEMITONES = float(os.getenv("TTS_PITCH_SEMITONES", "-4"))  # сдвиг тона в полутонах (-4 = басистый)
 BOT_NAME = os.getenv("BOT_NAME", "Хулио")
 PERSONALITY_FILE = os.getenv("PERSONALITY_FILE", "personalities/default.txt")
 

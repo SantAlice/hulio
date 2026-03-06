@@ -169,6 +169,19 @@ async def rate_cmd(interaction: discord.Interaction, speed: str):
     await interaction.response.send_message(f"Скорость речи: **{speed}**")
 
 
+@bot.tree.command(name="pitch", description="Сдвиг тона голоса в полутонах")
+@app_commands.describe(semitones="Полутоны (-8 = очень басистый, -4 = басистый, 0 = норма, +4 = мультяшный)")
+async def pitch_cmd(interaction: discord.Interaction, semitones: float):
+    config.TTS_PITCH_SEMITONES = semitones
+    if semitones < 0:
+        desc = "басистый"
+    elif semitones > 0:
+        desc = "мультяшный"
+    else:
+        desc = "нормальный"
+    await interaction.response.send_message(f"Тон голоса: **{semitones:+.0f}** полутонов ({desc})")
+
+
 @bot.tree.command(name="say", description="Заставить бота сказать что-то в войс")
 @app_commands.describe(text="Текст для озвучки")
 async def say_cmd(interaction: discord.Interaction, text: str):
