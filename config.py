@@ -4,9 +4,21 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
-# Поддержка нескольких ключей через запятую для ротации при исчерпании квоты
-GEMINI_API_KEYS = [k.strip() for k in os.getenv("GEMINI_API_KEY", "").split(",") if k.strip()]
-GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else ""
+
+# LLM настройки (OpenAI-совместимый API: DeepSeek, OpenAI, и т.д.)
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.deepseek.com")
+LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
+LLM_API_KEYS = [k.strip() for k in os.getenv("LLM_API_KEY", "").split(",") if k.strip()]
+LLM_API_KEY = LLM_API_KEYS[0] if LLM_API_KEYS else ""
+
+# Обратная совместимость с GEMINI_API_KEY
+if not LLM_API_KEYS:
+    _gemini_keys = [k.strip() for k in os.getenv("GEMINI_API_KEY", "").split(",") if k.strip()]
+    if _gemini_keys:
+        LLM_API_KEYS = _gemini_keys
+        LLM_API_KEY = _gemini_keys[0]
+        LLM_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+        LLM_MODEL = "gemini-2.5-flash"
 VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "models/vosk-model-ru-0.54")
 TTS_ENGINE = os.getenv("TTS_ENGINE", "silero")  # "silero" or "edge"
 TTS_VOICE = os.getenv("TTS_VOICE", "xenia")  # silero: aidar/baya/kseniya/xenia/eugene/random

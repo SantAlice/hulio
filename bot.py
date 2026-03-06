@@ -217,9 +217,9 @@ def main():
         print("Скопируй .env.example в .env и заполни токены.")
         sys.exit(1)
 
-    if not config.GEMINI_API_KEY:
-        print("ОШИБКА: Установи GEMINI_API_KEY в .env файле!")
-        print("Получи бесплатный ключ: https://aistudio.google.com/apikey")
+    if not config.LLM_API_KEY:
+        print("ОШИБКА: Установи LLM_API_KEY в .env файле!")
+        print("DeepSeek: https://platform.deepseek.com/api_keys")
         sys.exit(1)
 
     # Проверяем модель Vosk (опционально — есть фоллбэк на Google SR)
