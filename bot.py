@@ -123,8 +123,10 @@ async def voices_cmd(interaction: discord.Interaction, language: str = "ru"):
 
     lines = []
     for v in voices[:20]:
-        gender = "М" if v["Gender"] == "Male" else "Ж"
-        lines.append(f"`{v['ShortName']}` — {v['FriendlyName']} ({gender})")
+        gender = "М" if v["Gender"] == "Male" else "Ж" if v["Gender"] == "Female" else "?"
+        name = v.get('FriendlyName', v['ShortName'])
+        engine = v.get('Engine', 'edge')
+        lines.append(f"`{v['ShortName']}` — {name} ({gender}, {engine})")
 
     text = f"**Голоса для '{language}':**\n" + "\n".join(lines)
     if len(voices) > 20:
@@ -212,8 +214,8 @@ def main():
         print(f"ОШИБКА: Модель Vosk не найдена: {config.VOSK_MODEL_PATH}")
         print("Скачай модель:")
         print("  mkdir -p models && cd models")
-        print("  wget https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip")
-        print("  unzip vosk-model-small-ru-0.22.zip")
+        print("  wget https://alphacephei.com/vosk/models/vosk-model-ru-0.54.zip")
+        print("  unzip vosk-model-ru-0.54.zip")
         sys.exit(1)
 
     log.info("Запуск бота %s...", config.BOT_NAME)

@@ -36,10 +36,10 @@ def init(personality_text: str):
     genai.configure(api_key=_api_keys[_current_key_index])
     _personality = personality_text
     _model = genai.GenerativeModel(
-        "gemini-2.0-flash",
+        "gemini-2.5-flash",
         system_instruction=_personality,
     )
-    log.info("Gemini инициализирован (модель: gemini-2.0-flash, ключей: %d)", len(_api_keys))
+    log.info("Gemini инициализирован (модель: gemini-2.5-flash, ключей: %d)", len(_api_keys))
 
 
 def _rotate_key() -> bool:
@@ -51,7 +51,7 @@ def _rotate_key() -> bool:
     _current_key_index = (_current_key_index + 1) % len(_api_keys)
     genai.configure(api_key=_api_keys[_current_key_index])
     _model = genai.GenerativeModel(
-        "gemini-2.0-flash",
+        "gemini-2.5-flash",
         system_instruction=_personality,
     )
     log.info("Переключен на API ключ #%d", _current_key_index + 1)
@@ -159,7 +159,7 @@ def set_personality(text: str):
     global _model, _personality
     _personality = text
     _model = genai.GenerativeModel(
-        "gemini-2.0-flash",
+        "gemini-2.5-flash",
         system_instruction=_personality,
     )
     clear_all_history()
