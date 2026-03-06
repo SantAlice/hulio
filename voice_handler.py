@@ -15,6 +15,12 @@ try:
 except ImportError:
     HAS_VOICE_RECV = False
 
+try:
+    from davey import MediaType
+    HAS_DAVEY = True
+except ImportError:
+    HAS_DAVEY = False
+
 import config
 import stt
 import tts
@@ -52,6 +58,65 @@ class UserAudioBuffer:
         return self.total_bytes / 192000.0
 
 
+if HAS_VOICE_RECV:
+    class DaveAudioSink(voice_recv.AudioSink):
+        """
+        Кастомный sink, расшифровывающий DAVE E2EE перед декодированием Opus.
+
+        С марта 2026 Discord шифрует все голосовые пакеты через DAVE.
+        BasicSink получает зашифрованные данные и декодирует мусор.
+        Этот sink: DAVE decrypt → Opus decode → PCM.
+        """
+
+        def __init__(self, callback, voice_client):
+            self.callback = callback
+            self.vc = voice_client
+            self.decoder = discord.opus.Decoder()
+            self._use_dave = HAS_DAVEY and hasattr(self.vc, '_connection') and hasattr(getattr(self.vc, '_connection', None), 'dave_session')
+
+            if self._use_dave:
+                try:
+                    self.vc._connection.dave_session.set_passthrough_mode(True, 10)
+                    log.info("DAVE passthrough режим включён — ручная расшифровка")
+                except Exception as e:
+                    log.warning("Не удалось включить DAVE passthrough: %s", e)
+                    self._use_dave = False
+
+        @voice_recv.AudioSink.listener()
+        def on_voice_member_speaking_start(self, member):
+            pass
+
+        @voice_recv.AudioSink.listener()
+        def on_voice_member_speaking_stop(self, member):
+            pass
+
+        def wants_opus(self) -> bool:
+            return True
+
+        def write(self, user, data):
+            if user is None:
+                return
+
+            try:
+                if self._use_dave:
+                    opus_data = self.vc._connection.dave_session.decrypt(
+                        user.id, MediaType.audio, bytes(data.opus)
+                    )
+                    if not opus_data:
+                        return
+                    pcm = self.decoder.decode(opus_data, fec=False)
+                else:
+                    pcm = data.pcm
+            except Exception as e:
+                log.debug("Ошибка расшифровки DAVE для %s: %s", user, e)
+                return
+
+            self.callback(user, pcm)
+
+        def cleanup(self):
+            pass
+
+
 class VoiceHandler:
     """Управляет приёмом и отправкой голоса в Discord канале."""
 
@@ -76,7 +141,7 @@ class VoiceHandler:
 
         # Начинаем слушать если есть voice_recv
         if HAS_VOICE_RECV and isinstance(self.voice_client, voice_recv.VoiceRecvClient):
-            sink = voice_recv.BasicSink(self._on_audio_packet)
+            sink = DaveAudioSink(self._on_audio_data, self.voice_client)
             self.voice_client.listen(sink)
 
         self._active = True
@@ -100,12 +165,12 @@ class VoiceHandler:
         self.processing.clear()
         log.info("Отключен от голосового канала")
 
-    def _on_audio_packet(self, user, packet):
-        """Колбэк для каждого полученного аудио-пакета."""
+    def _on_audio_data(self, user, pcm_data):
+        """Колбэк для расшифрованного PCM аудио."""
         if user is None:
             return
         buf = self.buffers[user.id]
-        buf.add_chunk(packet.pcm)
+        buf.add_chunk(pcm_data)
 
     async def _silence_monitor(self):
         """
