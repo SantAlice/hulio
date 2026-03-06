@@ -222,13 +222,9 @@ def main():
         print("Получи бесплатный ключ: https://aistudio.google.com/apikey")
         sys.exit(1)
 
+    # Проверяем модель Vosk (опционально — есть фоллбэк на Google SR)
     if not os.path.exists(config.VOSK_MODEL_PATH):
-        print(f"ОШИБКА: Модель Vosk не найдена: {config.VOSK_MODEL_PATH}")
-        print("Скачай модель:")
-        print("  mkdir -p models && cd models")
-        print("  wget https://alphacephei.com/vosk/models/vosk-model-ru-0.54.zip")
-        print("  unzip vosk-model-ru-0.54.zip")
-        sys.exit(1)
+        log.warning("Модель Vosk не найдена: %s — будет использован Google Speech Recognition (онлайн)", config.VOSK_MODEL_PATH)
 
     log.info("Запуск бота %s...", config.BOT_NAME)
     bot.run(config.DISCORD_TOKEN)
