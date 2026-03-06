@@ -85,6 +85,10 @@ async def synthesize(text: str, voice: str | None = None, rate: str | None = Non
 async def _synthesize_silero(text: str, voice: str | None = None) -> str:
     """Синтез через Silero TTS + pitch shift."""
     voice = voice or config.TTS_VOICE
+    valid_speakers = ["aidar", "baya", "kseniya", "xenia", "eugene", "random"]
+    if voice not in valid_speakers:
+        log.warning("Голос '%s' не поддерживается Silero, использую 'xenia'", voice)
+        voice = "xenia"
 
     def _generate():
         model = _get_silero_model()
