@@ -6,7 +6,6 @@ import logging
 from collections import defaultdict
 from openai import AsyncOpenAI, RateLimitError, APIError
 import config
-import web_search
 
 log = logging.getLogger(__name__)
 
@@ -23,6 +22,9 @@ _current_key_index: int = 0
 
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 2.0
+
+# Флаг: модель поддерживает tools
+_tools_supported = True
 
 # Определение инструментов для LLM (веб-поиск)
 _tools = [
@@ -48,11 +50,12 @@ _tools = [
 
 def init(personality_text: str):
     """Инициализировать LLM с заданной личностью."""
-    global _client, _personality, _model_name, _api_keys, _current_key_index
+    global _client, _personality, _model_name, _api_keys, _current_key_index, _tools_supported
     _api_keys = config.LLM_API_KEYS.copy()
     _current_key_index = 0
     _personality = personality_text
     _model_name = config.LLM_MODEL
+    _tools_supported = True  # Сбрасываем при смене модели
 
     if not _api_keys:
         log.error("LLM_API_KEY не задан!")
@@ -99,28 +102,20 @@ async def _execute_tool_call(tool_call) -> str:
     if name == "web_search":
         query = args.get("query", "")
         log.info("Веб-поиск: %s", query)
-        return await web_search.search(query)
+        try:
+            import web_search
+            return await web_search.search(query)
+        except Exception as e:
+            log.error("Ошибка веб-поиска: %s", e)
+            return f"Поиск недоступен: {e}"
 
     return f"Неизвестный инструмент: {name}"
 
 
-async def _call_llm(messages: list[dict], use_tools: bool = True) -> object:
-    """Один вызов LLM API с ретраями."""
-    kwargs = {
-        "model": _model_name,
-        "messages": messages,
-        "max_tokens": config.LLM_MAX_TOKENS,
-        "temperature": 0.9,
-    }
-    if use_tools:
-        kwargs["tools"] = _tools
-        kwargs["tool_choice"] = "auto"
-
-    return await _client.chat.completions.create(**kwargs)
-
-
 async def chat(user_id: int, username: str, text: str) -> str:
     """Отправить сообщение и получить ответ (с поддержкой tool calling)."""
+    global _tools_supported
+
     if _client is None:
         return "Я ещё не готов, подожди секунду."
 
@@ -139,12 +134,24 @@ async def chat(user_id: int, username: str, text: str) -> str:
     while keys_tried <= len(_api_keys):
         for attempt in range(MAX_RETRIES):
             try:
-                response = await _call_llm(messages)
+                # Формируем запрос
+                kwargs = {
+                    "model": _model_name,
+                    "messages": messages,
+                    "max_tokens": config.LLM_MAX_TOKENS,
+                    "temperature": 0.9,
+                }
+                # Добавляем tools только если модель их поддерживает
+                if _tools_supported:
+                    kwargs["tools"] = _tools
+                    kwargs["tool_choice"] = "auto"
+
+                response = await _client.chat.completions.create(**kwargs)
                 choice = response.choices[0]
                 msg = choice.message
 
                 # Проверяем, хочет ли LLM вызвать инструмент
-                if msg.tool_calls:
+                if msg.tool_calls and _tools_supported:
                     # Добавляем ответ ассистента с tool_calls в контекст
                     messages.append({
                         "role": "assistant",
@@ -171,8 +178,13 @@ async def chat(user_id: int, username: str, text: str) -> str:
                             "content": result,
                         })
 
-                    # Второй вызов LLM с результатами поиска (без tools чтобы не зациклиться)
-                    response = await _call_llm(messages, use_tools=False)
+                    # Второй вызов LLM с результатами поиска (без tools)
+                    response = await _client.chat.completions.create(
+                        model=_model_name,
+                        messages=messages,
+                        max_tokens=config.LLM_MAX_TOKENS,
+                        temperature=0.9,
+                    )
                     reply = response.choices[0].message.content.strip()
                 else:
                     reply = msg.content.strip()
@@ -193,25 +205,30 @@ async def chat(user_id: int, username: str, text: str) -> str:
                     else:
                         break
 
-            except APIError as e:
+            except (APIError, Exception) as e:
                 last_error = e
-                # Если модель не поддерживает tools, пробуем без них
-                if "tool" in str(e).lower() or "function" in str(e).lower():
-                    log.warning("Модель не поддерживает tools, пробую без них")
+                error_str = str(e).lower()
+                # Если модель не поддерживает tools — отключаем и пробуем без них
+                if _tools_supported and ("tool" in error_str or "function" in error_str
+                                          or "unsupported" in error_str or "invalid" in error_str):
+                    log.warning("Модель не поддерживает tools, отключаю: %s", e)
+                    _tools_supported = False
+                    # Пробуем заново без tools
                     try:
-                        messages_clean = [{"role": "system", "content": _personality}] + history
-                        response = await _call_llm(messages_clean, use_tools=False)
+                        response = await _client.chat.completions.create(
+                            model=_model_name,
+                            messages=messages,
+                            max_tokens=config.LLM_MAX_TOKENS,
+                            temperature=0.9,
+                        )
                         reply = response.choices[0].message.content.strip()
                         history.append({"role": "assistant", "content": reply})
                         return reply
                     except Exception as e2:
                         log.error("Ошибка LLM без tools: %s", e2)
+                        last_error = e2
                         break
-                log.error("Ошибка LLM API: %s", e)
-                break
 
-            except Exception as e:
-                last_error = e
                 log.error("Ошибка LLM: %s", e)
                 break
 

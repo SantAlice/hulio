@@ -28,6 +28,9 @@ import llm
 
 log = logging.getLogger(__name__)
 
+# Глушим спам от RTCP пакетов
+logging.getLogger("discord.ext.voice_recv.reader").setLevel(logging.WARNING)
+
 
 class UserAudioBuffer:
     """Буфер аудио для одного пользователя."""
@@ -178,7 +181,7 @@ class VoiceHandler:
         Если пользователь замолчал (нет данных > SILENCE_DURATION), обрабатываем.
         """
         while self._active:
-            await asyncio.sleep(0.3)  # Проверяем чаще для быстрой реакции
+            await asyncio.sleep(0.3)
 
             if not self.voice_client or not self.voice_client.is_connected():
                 break
@@ -205,23 +208,34 @@ class VoiceHandler:
     ):
         """Обработать аудио одного пользователя: STT -> LLM -> TTS -> Play."""
         if user_id in self.processing:
+            log.debug("Пользователь %s уже обрабатывается, пропускаем", user_id)
             return
 
         self.processing.add(user_id)
         try:
-            # Конвертируем аудио для Vosk (в executor — CPU-bound)
-            loop = asyncio.get_event_loop()
-            converted = await loop.run_in_executor(
-                None, stt.pcm_stereo_48k_to_mono_16k, audio_bytes
-            )
+            log.info("Обработка аудио от %s (%.1f сек, %d байт)",
+                     user_id, len(audio_bytes) / 192000.0, len(audio_bytes))
+
+            # Конвертируем аудио для STT
+            converted = stt.pcm_stereo_48k_to_mono_16k(audio_bytes)
             if len(converted) < 1600:
+                log.debug("Аудио слишком короткое после конвертации: %d байт", len(converted))
                 return
 
-            # Распознаём речь (в executor — блокирующая операция)
-            text = await loop.run_in_executor(
-                None, stt.recognize, converted, config.VOSK_SAMPLE_RATE
-            )
+            # Распознаём речь (с таймаутом 15 сек чтобы не зависло)
+            try:
+                text = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(
+                        None, stt.recognize, converted, config.VOSK_SAMPLE_RATE
+                    ),
+                    timeout=15.0,
+                )
+            except asyncio.TimeoutError:
+                log.warning("STT таймаут для пользователя %s", user_id)
+                return
+
             if not text or len(text) < 2:
+                log.debug("STT не распознал речь от %s", user_id)
                 return
 
             # Определяем имя пользователя
@@ -249,7 +263,7 @@ class VoiceHandler:
                 pass
 
         except Exception as e:
-            log.error("Ошибка обработки аудио от %s: %s", user_id, e)
+            log.error("Ошибка обработки аудио от %s: %s", user_id, e, exc_info=True)
         finally:
             self.processing.discard(user_id)
 
