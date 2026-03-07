@@ -13,3 +13,4 @@ aiofiles>=23.0.0
 torch>=2.0.0
 scipy>=1.10.0
 omegaconf>=2.3.0
+duckduckgo-search>=7.0.0

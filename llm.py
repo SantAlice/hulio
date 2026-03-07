@@ -1,10 +1,12 @@
-"""LLM модуль с поддержкой DeepSeek и Gemini (OpenAI-совместимый API)."""
+"""LLM модуль с поддержкой DeepSeek и Gemini (OpenAI-совместимый API) + веб-поиск."""
 
 import asyncio
+import json
 import logging
 from collections import defaultdict
 from openai import AsyncOpenAI, RateLimitError, APIError
 import config
+import web_search
 
 log = logging.getLogger(__name__)
 
@@ -21,6 +23,27 @@ _current_key_index: int = 0
 
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 2.0
+
+# Определение инструментов для LLM (веб-поиск)
+_tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Поиск в интернете. Используй когда нужна актуальная информация, факты, новости, цены, погода, или когда не уверен в ответе.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Поисковый запрос на русском или английском"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    }
+]
 
 
 def init(personality_text: str):
@@ -65,8 +88,39 @@ def _trim_history(user_id: int):
         _conversations[user_id] = history[-(config.MAX_HISTORY_PER_USER * 2):]
 
 
+async def _execute_tool_call(tool_call) -> str:
+    """Выполнить вызов инструмента и вернуть результат."""
+    name = tool_call.function.name
+    try:
+        args = json.loads(tool_call.function.arguments)
+    except json.JSONDecodeError:
+        return "Ошибка парсинга аргументов"
+
+    if name == "web_search":
+        query = args.get("query", "")
+        log.info("Веб-поиск: %s", query)
+        return await web_search.search(query)
+
+    return f"Неизвестный инструмент: {name}"
+
+
+async def _call_llm(messages: list[dict], use_tools: bool = True) -> object:
+    """Один вызов LLM API с ретраями."""
+    kwargs = {
+        "model": _model_name,
+        "messages": messages,
+        "max_tokens": config.LLM_MAX_TOKENS,
+        "temperature": 0.9,
+    }
+    if use_tools:
+        kwargs["tools"] = _tools
+        kwargs["tool_choice"] = "auto"
+
+    return await _client.chat.completions.create(**kwargs)
+
+
 async def chat(user_id: int, username: str, text: str) -> str:
-    """Отправить сообщение и получить ответ."""
+    """Отправить сообщение и получить ответ (с поддержкой tool calling)."""
     if _client is None:
         return "Я ещё не готов, подожди секунду."
 
@@ -85,13 +139,43 @@ async def chat(user_id: int, username: str, text: str) -> str:
     while keys_tried <= len(_api_keys):
         for attempt in range(MAX_RETRIES):
             try:
-                response = await _client.chat.completions.create(
-                    model=_model_name,
-                    messages=messages,
-                    max_tokens=200,
-                    temperature=0.9,
-                )
-                reply = response.choices[0].message.content.strip()
+                response = await _call_llm(messages)
+                choice = response.choices[0]
+                msg = choice.message
+
+                # Проверяем, хочет ли LLM вызвать инструмент
+                if msg.tool_calls:
+                    # Добавляем ответ ассистента с tool_calls в контекст
+                    messages.append({
+                        "role": "assistant",
+                        "content": msg.content or "",
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments,
+                                }
+                            }
+                            for tc in msg.tool_calls
+                        ]
+                    })
+
+                    # Выполняем все tool calls
+                    for tc in msg.tool_calls:
+                        result = await _execute_tool_call(tc)
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": result,
+                        })
+
+                    # Второй вызов LLM с результатами поиска (без tools чтобы не зациклиться)
+                    response = await _call_llm(messages, use_tools=False)
+                    reply = response.choices[0].message.content.strip()
+                else:
+                    reply = msg.content.strip()
 
                 history.append({"role": "assistant", "content": reply})
                 log.debug("LLM ответ для %s: %s", username, reply[:100])
@@ -111,6 +195,18 @@ async def chat(user_id: int, username: str, text: str) -> str:
 
             except APIError as e:
                 last_error = e
+                # Если модель не поддерживает tools, пробуем без них
+                if "tool" in str(e).lower() or "function" in str(e).lower():
+                    log.warning("Модель не поддерживает tools, пробую без них")
+                    try:
+                        messages_clean = [{"role": "system", "content": _personality}] + history
+                        response = await _call_llm(messages_clean, use_tools=False)
+                        reply = response.choices[0].message.content.strip()
+                        history.append({"role": "assistant", "content": reply})
+                        return reply
+                    except Exception as e2:
+                        log.error("Ошибка LLM без tools: %s", e2)
+                        break
                 log.error("Ошибка LLM API: %s", e)
                 break
 

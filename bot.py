@@ -3,7 +3,7 @@
 Хулио — голосовой бот для Discord.
 
 Слушает голосовой канал, распознаёт речь, отвечает голосом.
-Бесплатные технологии: Vosk (STT), Edge TTS (TTS), Gemini (LLM).
+Бесплатные технологии: Vosk (STT), Silero TTS (TTS), DeepSeek/Gemini (LLM).
 """
 
 import asyncio
@@ -56,6 +56,10 @@ async def on_ready():
     # Инициализируем LLM
     personality = load_personality(config.PERSONALITY_FILE)
     llm.init(personality)
+
+    # Предзагружаем Silero TTS в фоне (чтоб не тормозило первый ответ)
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, tts.preload_model)
 
     # Создаём обработчик голоса
     voice_handler = VoiceHandler(bot)
@@ -181,6 +185,34 @@ async def pitch_cmd(interaction: discord.Interaction, semitones: float):
     await interaction.response.send_message(f"Тон голоса: **{semitones:+.0f}** полутонов ({desc})")
 
 
+@bot.tree.command(name="preset", description="Голосовой пресет (shrek, donkey, demon, robot, chipmunk, bass, normal)")
+@app_commands.describe(name="Название пресета")
+async def preset_cmd(interaction: discord.Interaction, name: str):
+    name = name.lower().strip()
+    if tts.set_preset(name):
+        preset = tts.VOICE_PRESETS[name]
+        await interaction.response.send_message(
+            f"Пресет: **{name}** — {preset['description']}\n"
+            f"Pitch: {preset['pitch']:+d}, Голос: {preset.get('speaker', config.TTS_VOICE)}"
+        )
+    else:
+        presets_list = ", ".join(tts.VOICE_PRESETS.keys())
+        await interaction.response.send_message(
+            f"Пресет `{name}` не найден.\nДоступные: {presets_list}",
+            ephemeral=True,
+        )
+
+
+@bot.tree.command(name="presets", description="Показать все голосовые пресеты")
+async def presets_cmd(interaction: discord.Interaction):
+    lines = []
+    current = tts.get_preset()
+    for name, preset in tts.VOICE_PRESETS.items():
+        marker = " (текущий)" if name == current else ""
+        lines.append(f"**{name}**{marker} — {preset['description']} (pitch: {preset['pitch']:+d})")
+    await interaction.response.send_message("\n".join(lines))
+
+
 @bot.tree.command(name="say", description="Заставить бота сказать что-то в войс")
 @app_commands.describe(text="Текст для озвучки")
 async def say_cmd(interaction: discord.Interaction, text: str):
@@ -198,6 +230,14 @@ async def say_cmd(interaction: discord.Interaction, text: str):
     except OSError:
         pass
     await interaction.followup.send(f"Сказал: *{text}*")
+
+
+@bot.tree.command(name="model", description="Сменить LLM модель")
+@app_commands.describe(model_name="Название модели (например google/gemini-2.5-flash, deepseek/deepseek-chat-v3-0324)")
+async def model_cmd(interaction: discord.Interaction, model_name: str):
+    config.LLM_MODEL = model_name
+    llm.init(load_personality(config.PERSONALITY_FILE))
+    await interaction.response.send_message(f"Модель изменена на **{model_name}**")
 
 
 def list_personalities() -> list[str]:

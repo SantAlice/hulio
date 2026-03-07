@@ -178,7 +178,7 @@ class VoiceHandler:
         Если пользователь замолчал (нет данных > SILENCE_DURATION), обрабатываем.
         """
         while self._active:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)  # Проверяем чаще для быстрой реакции
 
             if not self.voice_client or not self.voice_client.is_connected():
                 break
@@ -196,7 +196,6 @@ class VoiceHandler:
                     buf.clear()
                     if len(audio_bytes) > 3200:
                         guild = self.voice_client.guild if self.voice_client else None
-                        channel = self.voice_client.channel if self.voice_client else None
                         asyncio.create_task(
                             self._process_user_audio(user_id, audio_bytes, guild)
                         )
@@ -210,13 +209,18 @@ class VoiceHandler:
 
         self.processing.add(user_id)
         try:
-            # Конвертируем аудио для Vosk
-            converted = stt.pcm_stereo_48k_to_mono_16k(audio_bytes)
+            # Конвертируем аудио для Vosk (в executor — CPU-bound)
+            loop = asyncio.get_event_loop()
+            converted = await loop.run_in_executor(
+                None, stt.pcm_stereo_48k_to_mono_16k, audio_bytes
+            )
             if len(converted) < 1600:
                 return
 
-            # Распознаём речь
-            text = stt.recognize(converted, config.VOSK_SAMPLE_RATE)
+            # Распознаём речь (в executor — блокирующая операция)
+            text = await loop.run_in_executor(
+                None, stt.recognize, converted, config.VOSK_SAMPLE_RATE
+            )
             if not text or len(text) < 2:
                 return
 

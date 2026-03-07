@@ -10,6 +10,7 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://openrouter.ai/api/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "deepseek/deepseek-chat-v3-0324")
 LLM_API_KEYS = [k.strip() for k in os.getenv("LLM_API_KEY", "").split(",") if k.strip()]
 LLM_API_KEY = LLM_API_KEYS[0] if LLM_API_KEYS else ""
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "300"))
 
 # Обратная совместимость с GEMINI_API_KEY
 if not LLM_API_KEYS:
@@ -34,8 +35,8 @@ VOSK_SAMPLE_RATE = 16000  # Vosk needs 16kHz mono
 
 # Silence detection
 SILENCE_THRESHOLD = 500  # RMS threshold for silence
-SILENCE_DURATION = 1.5  # Seconds of silence to trigger processing
+SILENCE_DURATION = float(os.getenv("SILENCE_DURATION", "1.0"))  # Снижено с 1.5 до 1.0 для быстрой реакции
 MAX_RECORD_DURATION = 30  # Max seconds of recording per utterance
 
 # Conversation memory
-MAX_HISTORY_PER_USER = 20  # Max messages to remember per user
+MAX_HISTORY_PER_USER = 30  # Увеличено с 20 до 30 для лучшего контекста
